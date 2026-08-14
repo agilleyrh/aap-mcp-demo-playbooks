@@ -1,0 +1,32 @@
+---
+- name: MCP demo localhost task
+  hosts: localhost
+  connection: local
+  gather_facts: true
+  tasks:
+    - name: Record demo metadata
+      ansible.builtin.set_fact:
+        demo_timestamp: "{{ ansible_date_time.iso8601 }}"
+        demo_run_id: "{{ demo_run_id | default('unknown') }}"
+
+    - name: Simulate lightweight read-only work
+      ansible.builtin.debug:
+        msg:
+          - "MCP demo job {{ demo_run_id }} running on localhost"
+          - "Timestamp: {{ demo_timestamp }}"
+          - "Hostname: {{ ansible_hostname }}"
+
+    - name: Gather a few harmless facts
+      ansible.builtin.set_fact:
+        demo_python: "{{ ansible_python_version }}"
+        demo_os: "{{ ansible_distribution }} {{ ansible_distribution_version }}"
+
+    - name: Optional simulated failure for demo history
+      ansible.builtin.fail:
+        msg: "Simulated failure for MCP demo run {{ demo_run_id }} (expected ~50% of jobs)"
+      when: should_fail | default(false) | bool
+
+    - name: Report success
+      ansible.builtin.debug:
+        msg: "Demo run {{ demo_run_id }} completed successfully"
+      when: not (should_fail | default(false) | bool)
