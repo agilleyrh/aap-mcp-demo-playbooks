@@ -16,9 +16,6 @@
         mission_log: []
         sector_count: 16
         mission_codename: "Operation Stardust"
-        cached_interfaces: "{{ ansible_interfaces }}"
-        cached_mounts: "{{ ansible_mounts }}"
-        cached_default_ipv4: "{{ ansible_default_ipv4 | default({}) }}"
 
     - name: Display mission banner
       ansible.builtin.debug:
@@ -138,7 +135,7 @@
           'mtu': ansible_facts[item].mtu | default('n/a'),
           'active': ansible_facts[item].active | default(false)
         }] }}"
-      loop: "{{ ansible_interfaces | reject('equalto', 'lo') | list }}"
+      loop: "{{ ansible_interfaces | default([]) | reject('equalto', 'lo') | list }}"
       when: item in ansible_facts
 
     - name: Broadcast interface manifest
@@ -174,7 +171,7 @@
 
     - name: Catalog mounted filesystems (read-only)
       ansible.builtin.set_fact:
-        filesystem_catalog: "{{ ansible_mounts | map('combine', {}) | list }}"
+        filesystem_catalog: "{{ ansible_mounts | default([]) | map('combine', {}) | list }}"
 
     - name: Report top filesystem entries
       ansible.builtin.debug:
@@ -183,6 +180,7 @@
           size={{ (item.size_total / 1024 / 1024) | round(1) }}MB
           used={{ (item.size_available / 1024 / 1024) | round(1) }}MB free
       loop: "{{ filesystem_catalog[:8] }}"
+      when: filesystem_catalog | length > 0
       loop_control:
         label: "{{ item.mount }}"
 
