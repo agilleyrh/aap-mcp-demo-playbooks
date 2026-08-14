@@ -7,13 +7,15 @@
   gather_facts: true
   vars:
     mission_codename: "Operation Stardust"
-    probe_id: "{{ demo_run_id | default('probe-unknown') }}"
     sector_count: 16
   tasks:
-    - name: Initialize mission chronometer
+    - name: Initialize probe identity and chronometer
       ansible.builtin.set_fact:
+        probe_id: "{{ demo_run_id | default('probe-unknown') }}"
         mission_start: "{{ ansible_date_time.iso8601 }}"
         mission_log: []
+        sector_count: 16
+        mission_codename: "Operation Stardust"
 
     - name: Display mission banner
       ansible.builtin.debug:
@@ -89,8 +91,6 @@
   hosts: localhost
   connection: local
   gather_facts: false
-  vars:
-    sector_count: 16
   tasks:
     - name: Build sector scan schedule
       ansible.builtin.set_fact:
