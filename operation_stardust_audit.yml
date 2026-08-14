@@ -16,6 +16,9 @@
         mission_log: []
         sector_count: 16
         mission_codename: "Operation Stardust"
+        cached_interfaces: "{{ ansible_interfaces }}"
+        cached_mounts: "{{ ansible_mounts }}"
+        cached_default_ipv4: "{{ ansible_default_ipv4 | default({}) }}"
 
     - name: Display mission banner
       ansible.builtin.debug:
@@ -124,7 +127,7 @@
 - name: Operation Stardust — Communications relay mapping
   hosts: localhost
   connection: local
-  gather_facts: false
+  gather_facts: true
   tasks:
     - name: Inventory network interfaces
       ansible.builtin.set_fact:
@@ -155,7 +158,7 @@
 - name: Operation Stardust — Science deck analysis
   hosts: localhost
   connection: local
-  gather_facts: false
+  gather_facts: true
   tasks:
     - name: Probe Python runtime environment
       ansible.builtin.set_fact:
