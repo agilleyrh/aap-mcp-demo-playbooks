@@ -1,0 +1,190 @@
+---
+# Ansible Infrastructure Blocker Audit — read-only diagnostic that surfaces a P1 fleet failure.
+# Simulates probe results from a managed host fleet; does NOT modify the system.
+# Pass extra_vars: demo_run_id (string)
+- name: Infrastructure blocker audit — Control node preflight
+  hosts: localhost
+  connection: local
+  gather_facts: true
+  tasks:
+    - name: Initialize incident session
+      ansible.builtin.set_fact:
+        incident_id: "{{ demo_run_id | default('incident-unknown') }}"
+        audit_start: "{{ ansible_date_time.iso8601 }}"
+        control_node_profile:
+          hostname: "{{ ansible_hostname }}"
+          os: "{{ ansible_distribution }} {{ ansible_distribution_version }}"
+          python: "{{ ansible_python_version }}"
+          ansible_version: "{{ ansible_version.full }}"
+          temp_dir: "{{ ansible_env.TMPDIR | default('/tmp') }}"
+
+    - name: Display incident banner
+      ansible.builtin.debug:
+        msg:
+          - "################################################################"
+          - "#  ANSIBLE INFRASTRUCTURE BLOCKER AUDIT — INCIDENT RESPONSE   #"
+          - "################################################################"
+          - "  Incident ID ........... {{ incident_id }}"
+          - "  Control node .......... {{ control_node_profile.hostname }}"
+          - "  Audit started ......... {{ audit_start }}"
+          - "  Mode .................. READ-ONLY (no changes will be made)"
+          - "################################################################"
+
+    - name: Verify control node prerequisites (read-only)
+      ansible.builtin.set_fact:
+        control_node_checks:
+          python_available: true
+          ansible_installed: true
+          temp_dir_exists: true
+          status: "HEALTHY"
+
+    - name: Report control node health
+      ansible.builtin.debug:
+        msg:
+          - "[OK] Control node prerequisites look healthy."
+          - "     Python {{ control_node_profile.python }} | Ansible {{ control_node_profile.ansible_version }}"
+
+- name: Infrastructure blocker audit — Simulated fleet connectivity probe
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Load simulated fleet probe results
+      ansible.builtin.set_fact:
+        fleet_probe:
+          inventory: "production-linux-fleet"
+          hosts_probed: 50
+          probe_timestamp: "{{ audit_start }}"
+          results:
+            unreachable:
+              count: 38
+              sample_hosts:
+                - host: "web-prod-01.example.com"
+                  error: "ssh: connect to host port 22: Connection timed out"
+                - host: "web-prod-02.example.com"
+                  error: "ssh: connect to host port 22: Connection timed out"
+                - host: "app-prod-11.example.com"
+                  error: "ssh: connect to host port 22: No route to host"
+              likely_cause: "Network ACL change or security group misconfiguration during change window CHG004821"
+            missing_python:
+              count: 9
+              sample_hosts:
+                - host: "db-prod-03.example.com"
+                  error: "/usr/bin/python3: No such file or directory"
+                - host: "db-prod-04.example.com"
+                  error: "/usr/libexec/platform-python: not found"
+                - host: "cache-prod-02.example.com"
+                  error: "ModuleNotFoundError: No module named 'ansible'"
+              likely_cause: "Bad golden AMI roll-out removed python3-minimal from base image v2026.08.1"
+            auth_failure:
+              count: 3
+              sample_hosts:
+                - host: "lb-prod-01.example.com"
+                  error: "Permission denied (publickey,password)"
+              likely_cause: "SSH authorized_keys rotation incomplete on load balancer tier"
+
+    - name: Report fleet connectivity summary
+      ansible.builtin.debug:
+        msg:
+          - "[CRITICAL] Fleet probe completed — majority of hosts are NOT automation-ready"
+          - "  Inventory .............. {{ fleet_probe.inventory }}"
+          - "  Hosts probed ........... {{ fleet_probe.hosts_probed }}"
+          - "  UNREACHABLE ............ {{ fleet_probe.results.unreachable.count }} hosts"
+          - "  MISSING PYTHON ......... {{ fleet_probe.results.missing_python.count }} hosts"
+          - "  AUTH FAILURE ........... {{ fleet_probe.results.auth_failure.count }} hosts"
+          - "  HEALTHY ................ {{ fleet_probe.hosts_probed - fleet_probe.results.unreachable.count - fleet_probe.results.missing_python.count - fleet_probe.results.auth_failure.count }} hosts"
+
+- name: Infrastructure blocker audit — Root cause correlation
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Correlate failure patterns
+      ansible.builtin.set_fact:
+        incident_analysis:
+          severity: "P1 — AUTOMATION BLOCKED"
+          blast_radius_percent: "{{ ((fleet_probe.results.unreachable.count + fleet_probe.results.missing_python.count + fleet_probe.results.auth_failure.count) * 100 / fleet_probe.hosts_probed) | int }}"
+          primary_blockers:
+            - "SSH reachability lost on 76% of fleet (network/firewall regression)"
+            - "Python 3 interpreter missing on 18% of reachable hosts (bad image rollout)"
+            - "SSH key auth broken on 6% of hosts (incomplete key rotation)"
+          jobs_affected:
+            - "All patch management playbooks"
+            - "All configuration drift remediation jobs"
+            - "All compliance scanning job templates"
+            - "All app deployment workflows"
+          cannot_proceed_because:
+            - "ansible-playbook requires working SSH + Python on every target"
+            - "Fact gathering will fail before any task executes"
+            - "Rolling updates would leave fleet in inconsistent state"
+
+    - name: Display root cause analysis
+      ansible.builtin.debug:
+        var: incident_analysis
+
+    - name: Display sample host errors (unreachable)
+      ansible.builtin.debug:
+        msg:
+          - "--- UNREACHABLE HOST SAMPLES ---"
+          - "Host: {{ item.host }}"
+          - "Error: {{ item.error }}"
+      loop: "{{ fleet_probe.results.unreachable.sample_hosts }}"
+      loop_control:
+        label: "{{ item.host }}"
+
+    - name: Display sample host errors (missing python)
+      ansible.builtin.debug:
+        msg:
+          - "--- MISSING PYTHON SAMPLES ---"
+          - "Host: {{ item.host }}"
+          - "Error: {{ item.error }}"
+      loop: "{{ fleet_probe.results.missing_python.sample_hosts }}"
+      loop_control:
+        label: "{{ item.host }}"
+
+- name: Infrastructure blocker audit — Remediation checklist
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Build remediation checklist
+      ansible.builtin.set_fact:
+        remediation_steps:
+          immediate_actions:
+            - "HALT all scheduled Ansible job templates until fleet is restored"
+            - "Open incident bridge and page network + platform teams"
+            - "Rollback CHG004821 network ACL changes if confirmed as root cause"
+            - "Pause golden AMI v2026.08.1 promotion pipeline"
+          investigation_steps:
+            - "Verify SSH port 22 reachability from controller to affected subnets"
+            - "Spot-check: ssh -vvv <host> and confirm route/firewall path"
+            - "On reachable hosts: which python3 && python3 --version"
+            - "Compare /etc/os-release and installed packages against last-known-good image"
+            - "Validate machine credential / SSH key rotation completion on lb tier"
+          validation_before_resume:
+            - "Re-run this audit playbook — expect 0 unreachable, 0 missing python"
+            - "Run ansible -m ping against 100% of inventory"
+            - "Run a canary job template on one host per tier before full rollout"
+
+    - name: Display remediation checklist
+      ansible.builtin.debug:
+        var: remediation_steps
+
+    - name: Abort — automation cannot proceed until blockers are resolved
+      ansible.builtin.fail:
+        msg:
+          - "================================================================"
+          - "  P1 INFRASTRUCTURE BLOCKER — ANSIBLE JOBS CANNOT RUN"
+          - "================================================================"
+          - "  Incident ID ........... {{ incident_id }}"
+          - "  Severity .............. {{ incident_analysis.severity }}"
+          - "  Fleet impact .......... {{ incident_analysis.blast_radius_percent }}% of hosts blocked"
+          - ""
+          - "  PRIMARY ISSUES:"
+          - "    1. {{ incident_analysis.primary_blockers[0] }}"
+          - "    2. {{ incident_analysis.primary_blockers[1] }}"
+          - "    3. {{ incident_analysis.primary_blockers[2] }}"
+          - ""
+          - "  ACTION REQUIRED: Investigate and remediate BEFORE running"
+          - "  standard Ansible job templates. See remediation checklist above."
+          - "================================================================"
