@@ -10,15 +10,7 @@
 
   rules:
     - name: Trigger on CRITICAL log events
-      condition: >
-        event.payload is defined and (
-          (event.payload.message is defined and 'CRITICAL' in event.payload.message) or
-          (event.payload.log is defined and 'CRITICAL' in event.payload.log) or
-          (event.payload.body is defined and 'CRITICAL' in event.payload.body) or
-          (event.payload.level is defined and event.payload.level == 'CRITICAL') or
-          (event.payload.severity is defined and event.payload.severity == 'CRITICAL') or
-          ('CRITICAL' in event.payload | string)
-        )
+      condition: event.payload is defined and 'CRITICAL' in (event.payload | string)
       action:
         run_playbook:
           name: playbooks/handle_critical_log.yml
