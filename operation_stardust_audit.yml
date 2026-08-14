@@ -126,6 +126,10 @@
   connection: local
   gather_facts: true
   tasks:
+    - name: Initialize communications manifest
+      ansible.builtin.set_fact:
+        interface_manifest: []
+
     - name: Inventory network interfaces
       ansible.builtin.set_fact:
         interface_manifest: "{{ interface_manifest | default([]) + [{
@@ -189,7 +193,7 @@
         env_index:
           stability: "{{ 100 - (ansible_loadavg['1m'] | default(0) | float * 10) | int | abs }}"
           capacity: "{{ ((ansible_memfree_mb | default(0) | int) * 100 / (ansible_memtotal_mb | default(1) | int)) | int }}"
-          connectivity: "{{ (interface_manifest | length) * 12 }}"
+          connectivity: "{{ (interface_manifest | default([]) | length) * 12 }}"
           curiosity: "{{ (probe_id | length) * 3 }}"
 
     - name: Report environmental index
@@ -201,6 +205,10 @@
   connection: local
   gather_facts: false
   tasks:
+    - name: Initialize crew roster
+      ansible.builtin.set_fact:
+        crew_sample: []
+
     - name: Read local user database summary
       ansible.builtin.getent:
         database: passwd
