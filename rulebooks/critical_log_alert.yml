@@ -1,0 +1,30 @@
+---
+# Listens for log events and triggers when CRITICAL appears in the payload.
+# The webhook source is replaced by the AAP event stream at activation time.
+- name: Critical log alert listener
+  hosts: all
+  sources:
+    - ansible.eda.webhook:
+        host: 0.0.0.0
+        port: 5000
+
+  rules:
+    - name: Trigger on CRITICAL log events
+      condition: >
+        event.payload is defined and (
+          (event.payload.message is defined and 'CRITICAL' in event.payload.message) or
+          (event.payload.log is defined and 'CRITICAL' in event.payload.log) or
+          (event.payload.body is defined and 'CRITICAL' in event.payload.body) or
+          (event.payload.level is defined and event.payload.level == 'CRITICAL') or
+          (event.payload.severity is defined and event.payload.severity == 'CRITICAL') or
+          ('CRITICAL' in event.payload | string)
+        )
+      action:
+        run_playbook:
+          name: playbooks/handle_critical_log.yml
+
+    - name: Acknowledge non-critical log events
+      condition: event.payload is defined
+      action:
+        debug:
+          msg: "Log event received (no CRITICAL match): {{ event.payload | to_json }}"
