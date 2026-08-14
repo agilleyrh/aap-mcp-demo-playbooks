@@ -1,0 +1,274 @@
+---
+# Operation Stardust Audit — a harmless, read-only "deep space probe" survey of localhost.
+# Pass extra_vars: should_fail (bool), demo_run_id (string)
+- name: Operation Stardust — Pre-flight briefing
+  hosts: localhost
+  connection: local
+  gather_facts: true
+  vars:
+    mission_codename: "Operation Stardust"
+    probe_id: "{{ demo_run_id | default('probe-unknown') }}"
+    sector_count: 16
+  tasks:
+    - name: Initialize mission chronometer
+      ansible.builtin.set_fact:
+        mission_start: "{{ ansible_date_time.iso8601 }}"
+        mission_log: []
+
+    - name: Display mission banner
+      ansible.builtin.debug:
+        msg:
+          - "╔══════════════════════════════════════════════════════════════╗"
+          - "║  🛰️  OPERATION STARDUST — AUTOMATED PROBE SURVEY  🛰️          ║"
+          - "╠══════════════════════════════════════════════════════════════╣"
+          - "║  Probe ID .............. {{ probe_id }}"
+          - "║  Vessel hostname ....... {{ ansible_hostname }}"
+          - "║  Launch timestamp ...... {{ mission_start }}"
+          - "║  Ansible version ....... {{ ansible_version.full }}"
+          - "╚══════════════════════════════════════════════════════════════╝"
+
+    - name: Log mission start
+      ansible.builtin.set_fact:
+        mission_log: "{{ mission_log + ['MISSION START: ' ~ mission_start] }}"
+
+- name: Operation Stardust — Bridge systems inventory
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Collect platform identity
+      ansible.builtin.set_fact:
+        platform_profile:
+          os: "{{ ansible_distribution }} {{ ansible_distribution_version }}"
+          kernel: "{{ ansible_kernel }}"
+          architecture: "{{ ansible_architecture }}"
+          virtualization: "{{ ansible_virtualization_type | default('unknown') }}"
+          fqdn: "{{ ansible_fqdn }}"
+          machine_id: "{{ ansible_machine_id | default('redacted') }}"
+
+    - name: Report platform identity
+      ansible.builtin.debug:
+        var: platform_profile
+
+    - name: Collect compute telemetry
+      ansible.builtin.set_fact:
+        compute_telemetry:
+          cpu_cores: "{{ ansible_processor_cores | default(ansible_processor_count) }}"
+          cpu_threads: "{{ ansible_processor_vcpus | default('n/a') }}"
+          cpu_model: "{{ ansible_processor[2] | default('unknown') if (ansible_processor | length) > 2 else 'unknown' }}"
+          load_average:
+            "1m": "{{ ansible_loadavg['1m'] | default('n/a') }}"
+            "5m": "{{ ansible_loadavg['5m'] | default('n/a') }}"
+            "15m": "{{ ansible_loadavg['15m'] | default('n/a') }}"
+
+    - name: Report compute telemetry
+      ansible.builtin.debug:
+        var: compute_telemetry
+
+    - name: Collect memory telemetry
+      ansible.builtin.set_fact:
+        memory_telemetry:
+          total_mb: "{{ (ansible_memtotal_mb | default(0)) | int }}"
+          free_mb: "{{ (ansible_memfree_mb | default(0)) | int }}"
+          swap_total_mb: "{{ (ansible_swaptotal_mb | default(0)) | int }}"
+          swap_free_mb: "{{ (ansible_swapfree_mb | default(0)) | int }}"
+
+    - name: Report memory telemetry
+      ansible.builtin.debug:
+        var: memory_telemetry
+
+    - name: Append bridge data to mission log
+      ansible.builtin.set_fact:
+        mission_log: "{{ mission_log + [
+          'BRIDGE: ' ~ platform_profile.os ~ ' on ' ~ platform_profile.architecture,
+          'COMPUTE: ' ~ (compute_telemetry.cpu_cores | string) ~ ' cores, load ' ~ (compute_telemetry.load_average['1m'] | string),
+          'MEMORY: ' ~ (memory_telemetry.total_mb | string) ~ ' MB total'
+        ] }}"
+
+- name: Operation Stardust — Sensor array deep sweep
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    sector_count: 16
+  tasks:
+    - name: Build sector scan schedule
+      ansible.builtin.set_fact:
+        sector_schedule: "{{ sector_schedule | default([]) + [{
+          'sector': '%02d' | format(item),
+          'band': ['alpha', 'beta', 'gamma', 'delta', 'epsilon', 'zeta', 'eta', 'theta'][item % 8],
+          'signal_db': (item * 7 + (ansible_memfree_mb | default(100) % 13)) % 100,
+          'anomaly': (item % 5 == 0)
+        }] }}"
+      loop: "{{ range(1, sector_count + 1) | list }}"
+
+    - name: Sweep sector {{ item.sector }} ({{ item.band }} band)
+      ansible.builtin.debug:
+        msg: >-
+          SECTOR {{ item.sector }} | band={{ item.band }}
+          | signal={{ item.signal_db }} dB
+          | anomaly={{ item.anomaly }}
+          | probe={{ probe_id }}
+      loop: "{{ sector_schedule }}"
+      loop_control:
+        label: "Sector {{ item.sector }}"
+
+    - name: Summarize sector anomalies
+      ansible.builtin.set_fact:
+        anomaly_sectors: "{{ sector_schedule | selectattr('anomaly') | map(attribute='sector') | list }}"
+
+    - name: Report anomaly summary
+      ansible.builtin.debug:
+        msg: "Anomaly sectors detected: {{ anomaly_sectors | join(', ') }}"
+
+- name: Operation Stardust — Communications relay mapping
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Inventory network interfaces
+      ansible.builtin.set_fact:
+        interface_manifest: "{{ interface_manifest | default([]) + [{
+          'name': item,
+          'ipv4': ansible_facts[item].ipv4.address | default('none'),
+          'mac': ansible_facts[item].macaddress | default('none'),
+          'mtu': ansible_facts[item].mtu | default('n/a'),
+          'active': ansible_facts[item].active | default(false)
+        }] }}"
+      loop: "{{ ansible_interfaces | reject('equalto', 'lo') | list }}"
+      when: item in ansible_facts
+
+    - name: Broadcast interface manifest
+      ansible.builtin.debug:
+        var: interface_manifest
+
+    - name: Identify default route interface
+      ansible.builtin.set_fact:
+        default_ipv4: "{{ ansible_default_ipv4 | default({}) }}"
+
+    - name: Report primary uplink
+      ansible.builtin.debug:
+        msg: >-
+          Primary uplink: {{ default_ipv4.interface | default('unknown') }}
+          ({{ default_ipv4.address | default('no address') }}/{{ default_ipv4.prefix | default('?') }})
+
+- name: Operation Stardust — Science deck analysis
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Probe Python runtime environment
+      ansible.builtin.set_fact:
+        science_python:
+          version: "{{ ansible_python_version }}"
+          interpreter: "{{ ansible_python.executable | default('unknown') }}"
+          major: "{{ ansible_python_version.split('.')[0] }}"
+          minor: "{{ ansible_python_version.split('.')[1] }}"
+
+    - name: Report Python environment
+      ansible.builtin.debug:
+        var: science_python
+
+    - name: Catalog mounted filesystems (read-only)
+      ansible.builtin.set_fact:
+        filesystem_catalog: "{{ ansible_mounts | map('combine', {}) | list }}"
+
+    - name: Report top filesystem entries
+      ansible.builtin.debug:
+        msg: >-
+          Mount {{ item.mount }} ({{ item.fstype }})
+          size={{ (item.size_total / 1024 / 1024) | round(1) }}MB
+          used={{ (item.size_available / 1024 / 1024) | round(1) }}MB free
+      loop: "{{ filesystem_catalog[:8] }}"
+      loop_control:
+        label: "{{ item.mount }}"
+
+    - name: Build environmental index scores
+      ansible.builtin.set_fact:
+        env_index:
+          stability: "{{ 100 - (ansible_loadavg['1m'] | default(0) | float * 10) | int | abs }}"
+          capacity: "{{ ((ansible_memfree_mb | default(0) | int) * 100 / (ansible_memtotal_mb | default(1) | int)) | int }}"
+          connectivity: "{{ (interface_manifest | length) * 12 }}"
+          curiosity: "{{ (probe_id | length) * 3 }}"
+
+    - name: Report environmental index
+      ansible.builtin.debug:
+        var: env_index
+
+- name: Operation Stardust — Crew quarters manifest (harmless user facts)
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Read local user database summary
+      ansible.builtin.getent:
+        database: passwd
+      register: passwd_db
+
+    - name: Build crew roster sample
+      ansible.builtin.set_fact:
+        crew_sample: "{{ crew_sample | default([]) + [{
+          'callsign': item.key,
+          'uid': item.value[1],
+          'home_sector': item.value[4]
+        }] }}"
+      loop: "{{ passwd_db.ansible_facts.getent_passwd | dict2items | list }}"
+      when: crew_idx < 12
+      loop_control:
+        index_var: crew_idx
+        label: "{{ item.key }}"
+
+    - name: Display crew roster excerpt
+      ansible.builtin.debug:
+        msg: "Crew {{ item.callsign }} (uid {{ item.uid }}) stationed at {{ item.home_sector }}"
+      loop: "{{ crew_sample | default([]) }}"
+      loop_control:
+        label: "{{ item.callsign }}"
+
+- name: Operation Stardust — Final telemetry package
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Compile mission dossier
+      ansible.builtin.set_fact:
+        mission_dossier:
+          probe_id: "{{ probe_id }}"
+          codename: "{{ mission_codename | default('Operation Stardust') }}"
+          completed_at: "{{ ansible_date_time.iso8601 }}"
+          platform: "{{ platform_profile | default({}) }}"
+          compute: "{{ compute_telemetry | default({}) }}"
+          memory: "{{ memory_telemetry | default({}) }}"
+          sectors_scanned: "{{ sector_count | default(16) }}"
+          anomalies: "{{ anomaly_sectors | default([]) }}"
+          interfaces: "{{ interface_manifest | default([]) | length }}"
+          env_index: "{{ env_index | default({}) }}"
+          crew_sampled: "{{ crew_sample | default([]) | length }}"
+
+    - name: Transmit full dossier to mission control
+      ansible.builtin.debug:
+        var: mission_dossier
+
+    - name: Append completion to mission log
+      ansible.builtin.set_fact:
+        mission_log: "{{ mission_log + ['MISSION DOSSIER COMPILED', 'LOG ENTRIES: ' ~ (mission_log | length | string)] }}"
+
+    - name: Display mission log tail
+      ansible.builtin.debug:
+        var: mission_log
+
+    - name: Detect critical anomaly requiring abort
+      ansible.builtin.fail:
+        msg: >-
+          🚨 CRITICAL ANOMALY DETECTED in probe {{ probe_id }}!
+          Science deck recommends mission abort.
+          (Simulated failure for MCP demo — expected ~50% of runs)
+      when: should_fail | default(false) | bool
+
+    - name: Mission success — probe returning to base
+      ansible.builtin.debug:
+        msg:
+          - "✅ OPERATION STARDUST COMPLETE"
+          - "Probe {{ probe_id }} surveyed localhost with zero collateral impact."
+          - "All systems nominal. Tea earl grey, hot. ☕"
+          - "Environmental index: {{ env_index | default({}) }}"
