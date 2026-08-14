@@ -14,6 +14,7 @@
       action:
         run_playbook:
           name: playbooks/handle_critical_log.yml
+          inventory: inventory/localhost.yml
 
     - name: Acknowledge non-critical log events
       condition: event.payload is defined
