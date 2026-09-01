@@ -1,0 +1,144 @@
+---
+# Platform upgrade — read-only simulation of a staged upgrade on localhost.
+# Does not install packages, restart services, or modify the system.
+# extra_vars: demo_run_id (string), should_fail (bool),
+#             upgrade_from (string), upgrade_to (string)
+- name: Platform upgrade — Pre-flight
+  hosts: localhost
+  connection: local
+  gather_facts: true
+  vars:
+    source_version: "{{ upgrade_from | default('2.6') }}"
+    target_version: "{{ upgrade_to | default('2.7') }}"
+  tasks:
+    - name: Record upgrade session
+      ansible.builtin.set_fact:
+        upgrade_id: "UPG-{{ demo_run_id | default(ansible_date_time.epoch) }}"
+        upgrade_started: "{{ ansible_date_time.iso8601 }}"
+        upgrade_stages: []
+        source_version: "{{ upgrade_from | default('2.6') }}"
+        target_version: "{{ upgrade_to | default('2.7') }}"
+
+    - name: Display upgrade banner
+      ansible.builtin.debug:
+        msg:
+          - "=============================================================="
+          - " PLATFORM UPGRADE  (SIMULATION — NO PACKAGES ARE INSTALLED)"
+          - "=============================================================="
+          - " Upgrade ID ............. {{ upgrade_id }}"
+          - " Control node ........... {{ ansible_hostname }}"
+          - " Planned path ........... {{ source_version }}  ->  {{ target_version }}"
+          - " Started ................ {{ upgrade_started }}"
+          - " Mode ................... DRY-RUN stage walkthrough"
+          - "=============================================================="
+
+    - name: Evaluate pre-flight gates (read-only facts)
+      ansible.builtin.set_fact:
+        preflight:
+          python_ok: "{{ ansible_python_version is version('3.9', '>=') }}"
+          memory_mb: "{{ ansible_memtotal_mb | default(0) }}"
+          memory_ok: "{{ (ansible_memtotal_mb | default(0) | int) >= 512 }}"
+          arch: "{{ ansible_architecture }}"
+          os: "{{ ansible_distribution }} {{ ansible_distribution_version }}"
+          load_1m: "{{ ansible_loadavg['1m'] | default(0) }}"
+
+    - name: Report pre-flight gates
+      ansible.builtin.debug:
+        var: preflight
+
+    - name: Assert simulated pre-flight passed
+      ansible.builtin.assert:
+        that:
+          - preflight.python_ok | bool
+        fail_msg: "Python 3.9+ required for this simulated upgrade path"
+        success_msg: "Pre-flight gates passed (simulation)"
+        quiet: true
+
+- name: Platform upgrade — Staged apply (no changes)
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Define upgrade stage plan
+      ansible.builtin.set_fact:
+        stage_plan:
+          - id: 1
+            name: drain_job_queue
+            detail: "Would pause schedules and wait for running jobs to finish"
+          - id: 2
+            name: pull_release_artifacts
+            detail: "Would pull operator/bundle images for {{ target_version }}"
+          - id: 3
+            name: apply_operator_csv
+            detail: "Would switch subscription channel and approve InstallPlan"
+          - id: 4
+            name: wait_for_operator_ready
+            detail: "Would wait for CSV phase = Succeeded"
+          - id: 5
+            name: run_schema_migrations
+            detail: "Would run controller/hub/eda migrations (idempotent)"
+          - id: 6
+            name: rolling_restart
+            detail: "Would roll gateway, controller, hub, eda pods"
+          - id: 7
+            name: resume_schedules
+            detail: "Would re-enable job schedules after validation"
+
+    - name: Execute stage {{ item.id }} — {{ item.name }} (simulated)
+      ansible.builtin.debug:
+        msg: >-
+          STAGE {{ item.id }}/{{ stage_plan | length }}  [SKIPPED-NOOP]
+          {{ item.name }} — {{ item.detail }}
+      loop: "{{ stage_plan }}"
+      loop_control:
+        label: "stage {{ item.id }} {{ item.name }}"
+
+    - name: Record skipped change set
+      ansible.builtin.set_fact:
+        change_set:
+          packages_installed: []
+          services_restarted: []
+          files_modified: []
+          cluster_objects_patched: []
+          note: "All stages logged only. Host and cluster were not mutated."
+
+    - name: Report empty change set
+      ansible.builtin.debug:
+        var: change_set
+
+- name: Platform upgrade — Finalize
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Compile upgrade dossier
+      ansible.builtin.set_fact:
+        upgrade_dossier:
+          upgrade_id: "{{ upgrade_id }}"
+          from_version: "{{ source_version }}"
+          to_version: "{{ target_version }}"
+          completed_at: "{{ ansible_date_time.iso8601 }}"
+          stages_walked: "{{ stage_plan | map(attribute='name') | list }}"
+          mutations: 0
+          next_playbook: post_upgrade_validation.yml
+
+    - name: Transmit upgrade dossier
+      ansible.builtin.debug:
+        var: upgrade_dossier
+
+    - name: Optional simulated upgrade failure
+      ansible.builtin.fail:
+        msg: >-
+          Simulated upgrade abort for {{ upgrade_id }} at rolling_restart.
+          In a real run this would be a crashed pod or failed migration.
+          Restore from pre_upgrade_backup.yml restore point.
+          (Demo extra_var should_fail=true)
+      when: should_fail | default(false) | bool
+
+    - name: Upgrade simulation complete
+      ansible.builtin.debug:
+        msg:
+          - "PLATFORM UPGRADE WALKTHROUGH COMPLETE"
+          - "{{ source_version }} -> {{ target_version }} recorded as a dry-run only."
+          - "Safe to proceed to post_upgrade_validation.yml"
+      when: not (should_fail | default(false) | bool)

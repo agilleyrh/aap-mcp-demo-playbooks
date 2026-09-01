@@ -1,0 +1,169 @@
+---
+# Post-upgrade validation — read-only health and smoke checks on localhost.
+# Does not remediate, restart, or write. Safe to run anytime.
+# extra_vars: demo_run_id (string), should_fail (bool),
+#             upgrade_from (string), upgrade_to (string)
+- name: Post-upgrade validation — Open checks
+  hosts: localhost
+  connection: local
+  gather_facts: true
+  vars:
+    source_version: "{{ upgrade_from | default('2.6') }}"
+    target_version: "{{ upgrade_to | default('2.7') }}"
+  tasks:
+    - name: Record validation session
+      ansible.builtin.set_fact:
+        validation_id: "VAL-{{ demo_run_id | default(ansible_date_time.epoch) }}"
+        validation_started: "{{ ansible_date_time.iso8601 }}"
+        check_results: []
+        source_version: "{{ upgrade_from | default('2.6') }}"
+        target_version: "{{ upgrade_to | default('2.7') }}"
+
+    - name: Display validation banner
+      ansible.builtin.debug:
+        msg:
+          - "=============================================================="
+          - " POST-UPGRADE VALIDATION  (READ-ONLY SMOKE CHECKS)"
+          - "=============================================================="
+          - " Validation ID .......... {{ validation_id }}"
+          - " Control node ........... {{ ansible_hostname }}"
+          - " Expected version ....... {{ target_version }} (from {{ source_version }})"
+          - " Started ................ {{ validation_started }}"
+          - " Mode ................... observe only — no remediation"
+          - "=============================================================="
+
+- name: Post-upgrade validation — Control-node health
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Check Python interpreter
+      ansible.builtin.command:
+        argv:
+          - "{{ ansible_python.executable | default('python3') }}"
+          - "--version"
+      register: python_check
+      changed_when: false
+      failed_when: false
+
+    - name: Check Ansible runtime
+      ansible.builtin.set_fact:
+        ansible_runtime:
+          version: "{{ ansible_version.full }}"
+          python: "{{ python_check.stdout | default(ansible_python_version) }}"
+          interpreter: "{{ ansible_python.executable | default('unknown') }}"
+
+    - name: Report runtime health
+      ansible.builtin.debug:
+        var: ansible_runtime
+
+    - name: Collect resource telemetry
+      ansible.builtin.set_fact:
+        resource_health:
+          cpu_cores: "{{ ansible_processor_cores | default(ansible_processor_count) }}"
+          mem_total_mb: "{{ ansible_memtotal_mb | default(0) }}"
+          mem_free_mb: "{{ ansible_memfree_mb | default(0) }}"
+          load_1m: "{{ ansible_loadavg['1m'] | default('n/a') }}"
+          load_5m: "{{ ansible_loadavg['5m'] | default('n/a') }}"
+          status: HEALTHY
+
+    - name: Report resource telemetry
+      ansible.builtin.debug:
+        var: resource_health
+
+- name: Post-upgrade validation — Simulated platform probes
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Define post-upgrade probe list
+      ansible.builtin.set_fact:
+        probes:
+          - id: gateway_http
+            name: Gateway /api/gateway/v1/ping
+            expect: pong
+            result: PASS
+            detail: "Would GET gateway ping and expect HTTP 200"
+          - id: controller_api
+            name: Controller /api/controller/v2/ping
+            expect: version string
+            result: PASS
+            detail: "Would confirm controller version == {{ target_version }}"
+          - id: hub_api
+            name: Automation Hub status
+            expect: ready
+            result: PASS
+            detail: "Would confirm hub API and content services"
+          - id: eda_api
+            name: Event-Driven Ansible API
+            expect: ready
+            result: PASS
+            detail: "Would confirm EDA API workers are up"
+          - id: job_canary
+            name: Canary job template
+            expect: successful
+            result: PASS
+            detail: "Would launch a localhost hello-world job and wait"
+          - id: schedule_resume
+            name: Scheduler enabled
+            expect: enabled
+            result: PASS
+            detail: "Would verify paused schedules were re-enabled"
+
+    - name: Run probe {{ item.id }} (simulated)
+      ansible.builtin.debug:
+        msg: >-
+          [{{ item.result }}] {{ item.name }}
+          expect={{ item.expect }} — {{ item.detail }}
+      loop: "{{ probes }}"
+      loop_control:
+        label: "{{ item.id }}"
+
+    - name: Summarize probe results
+      ansible.builtin.set_fact:
+        probes_passed: "{{ probes | selectattr('result', 'equalto', 'PASS') | list | length }}"
+        probes_total: "{{ probes | length }}"
+
+    - name: Report probe summary
+      ansible.builtin.debug:
+        msg: "Probes passed {{ probes_passed }}/{{ probes_total }} (all simulated)"
+
+- name: Post-upgrade validation — Sign-off
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Compile validation report
+      ansible.builtin.set_fact:
+        validation_report:
+          validation_id: "{{ validation_id }}"
+          completed_at: "{{ ansible_date_time.iso8601 }}"
+          expected_version: "{{ target_version }}"
+          previous_version: "{{ source_version }}"
+          runtime: "{{ ansible_runtime }}"
+          resources: "{{ resource_health }}"
+          probes_passed: "{{ probes_passed }}"
+          probes_total: "{{ probes_total }}"
+          mutations: 0
+          signoff: READY_FOR_PRODUCTION
+
+    - name: Transmit validation report
+      ansible.builtin.debug:
+        var: validation_report
+
+    - name: Optional simulated validation failure
+      ansible.builtin.fail:
+        msg: >-
+          Simulated post-upgrade check failure for {{ validation_id }}.
+          In a real run a ping, version skew, or canary job would have failed.
+          Do not resume schedules until probes pass.
+          (Demo extra_var should_fail=true)
+      when: should_fail | default(false) | bool
+
+    - name: Validation complete — upgrade path demo finished
+      ansible.builtin.debug:
+        msg:
+          - "POST-UPGRADE VALIDATION COMPLETE"
+          - "All probes passed in simulation. No host changes were made."
+          - "Demo path: pre_upgrade_backup.yml -> platform_upgrade.yml -> post_upgrade_validation.yml"
+      when: not (should_fail | default(false) | bool)

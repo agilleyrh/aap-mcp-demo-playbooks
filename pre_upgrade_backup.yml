@@ -1,0 +1,147 @@
+---
+# Pre-upgrade backup — read-only simulation of a control-node backup catalog.
+# Does not write files, dump databases, or modify the system.
+# extra_vars: demo_run_id (string), should_fail (bool), upgrade_from (string)
+- name: Pre-upgrade backup — Initialize maintenance window
+  hosts: localhost
+  connection: local
+  gather_facts: true
+  vars:
+    backup_retention_days: 14
+    source_version: "{{ upgrade_from | default('2.6') }}"
+  tasks:
+    - name: Record backup session identity
+      ansible.builtin.set_fact:
+        backup_id: "BKP-{{ demo_run_id | default(ansible_date_time.epoch) }}"
+        backup_started: "{{ ansible_date_time.iso8601 }}"
+        backup_node: "{{ ansible_hostname }}"
+        backup_catalog: []
+        source_version: "{{ upgrade_from | default('2.6') }}"
+
+    - name: Display backup banner
+      ansible.builtin.debug:
+        msg:
+          - "=============================================================="
+          - " PRE-UPGRADE BACKUP  (SIMULATION — NO DATA IS WRITTEN)"
+          - "=============================================================="
+          - " Backup ID .............. {{ backup_id }}"
+          - " Control node ........... {{ backup_node }}"
+          - " Platform version ....... {{ source_version }}"
+          - " Started ................ {{ backup_started }}"
+          - " Retention .............. {{ backup_retention_days }} days (policy only)"
+          - " Mode ................... READ-ONLY catalog of what WOULD be backed up"
+          - "=============================================================="
+
+- name: Pre-upgrade backup — Catalog restore points
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Collect control-node identity for the backup manifest
+      ansible.builtin.set_fact:
+        control_node_snapshot:
+          hostname: "{{ ansible_hostname }}"
+          fqdn: "{{ ansible_fqdn }}"
+          os: "{{ ansible_distribution }} {{ ansible_distribution_version }}"
+          kernel: "{{ ansible_kernel }}"
+          architecture: "{{ ansible_architecture }}"
+          python: "{{ ansible_python_version }}"
+          ansible: "{{ ansible_version.full }}"
+
+    - name: Report control-node snapshot
+      ansible.builtin.debug:
+        var: control_node_snapshot
+
+    - name: Build simulated backup object catalog
+      ansible.builtin.set_fact:
+        backup_objects:
+          - name: aap-postgres-logical-dump
+            class: database
+            estimated_mb: 512
+            method: "pg_dump (simulated)"
+            status: CATALOGED
+          - name: aap-redis-rdb
+            class: cache
+            estimated_mb: 64
+            method: "BGSAVE snapshot (simulated)"
+            status: CATALOGED
+          - name: controller-settings-export
+            class: config
+            estimated_mb: 8
+            method: "API JSON export (simulated)"
+            status: CATALOGED
+          - name: job-template-definitions
+            class: config
+            estimated_mb: 16
+            method: "Controller API export (simulated)"
+            status: CATALOGED
+          - name: execution-environment-digest-list
+            class: images
+            estimated_mb: 4
+            method: "image ID inventory (simulated)"
+            status: CATALOGED
+          - name: custom-ca-and-tls-material
+            class: secrets
+            estimated_mb: 1
+            method: "path inventory only — secrets not copied"
+            status: CATALOGED
+
+    - name: Display each backup object (no files created)
+      ansible.builtin.debug:
+        msg: >-
+          [{{ item.status }}] {{ item.class | upper }}  {{ item.name }}
+          ~{{ item.estimated_mb }} MB via {{ item.method }}
+      loop: "{{ backup_objects }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Compute catalog totals
+      ansible.builtin.set_fact:
+        backup_total_mb: "{{ backup_objects | map(attribute='estimated_mb') | map('int') | sum }}"
+        backup_object_count: "{{ backup_objects | length }}"
+
+    - name: Report backup catalog summary
+      ansible.builtin.debug:
+        msg:
+          - "Objects cataloged ........ {{ backup_object_count }}"
+          - "Estimated backup size .... {{ backup_total_mb }} MB"
+          - "Restore point ID ......... {{ backup_id }}"
+          - "Nothing was written to disk."
+
+- name: Pre-upgrade backup — Verify restore-point completeness
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Compile backup manifest
+      ansible.builtin.set_fact:
+        backup_manifest:
+          backup_id: "{{ backup_id }}"
+          completed_at: "{{ ansible_date_time.iso8601 }}"
+          node: "{{ backup_node }}"
+          source_version: "{{ source_version }}"
+          object_count: "{{ backup_object_count }}"
+          estimated_mb: "{{ backup_total_mb }}"
+          objects: "{{ backup_objects | map(attribute='name') | list }}"
+          restorable: true
+          on_disk: false
+
+    - name: Transmit backup manifest (debug only)
+      ansible.builtin.debug:
+        var: backup_manifest
+
+    - name: Optional simulated backup failure
+      ansible.builtin.fail:
+        msg: >-
+          Simulated backup verification failure for {{ backup_id }}.
+          In a real run this would mean a dump or checksum mismatch.
+          (Demo extra_var should_fail=true)
+      when: should_fail | default(false) | bool
+
+    - name: Backup simulation complete
+      ansible.builtin.debug:
+        msg:
+          - "PRE-UPGRADE BACKUP CATALOG COMPLETE"
+          - "Restore point {{ backup_id }} is recorded in job output only."
+          - "Safe to proceed to platform_upgrade.yml"
+      when: not (should_fail | default(false) | bool)
